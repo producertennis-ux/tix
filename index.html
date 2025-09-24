@@ -26,6 +26,48 @@
         .cards-container::-webkit-scrollbar-thumb:hover {
             background: #9ca3af;
         }
+        /* Styles for new features */
+        .task-done .task-name, .task-done .task-notes {
+            text-decoration: line-through;
+            color: #9ca3af; /* gray-400 */
+        }
+        .dragging {
+            opacity: 0.5;
+            border: 2px dashed #d1d5db;
+        }
+        .drag-over {
+            background-color: #eef2ff; /* indigo-100 */
+        }
+
+        @media print {
+            body {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            .container {
+                margin: 0;
+                padding: 0;
+                max-width: 100%;
+            }
+            header button, #loading-indicator, #error-message {
+                display: none;
+            }
+            .cards-container {
+                height: auto !important;
+                overflow-y: visible !important;
+            }
+            .bg-white {
+                box-shadow: none;
+                border: 1px solid #e5e7eb; /* gray-200 */
+            }
+            #kanban-board {
+                display: block; /* Force single column for better print layout */
+            }
+            #kanban-board > div {
+                page-break-inside: avoid;
+                margin-bottom: 1.5rem;
+            }
+        }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800">
@@ -34,6 +76,9 @@
         <header class="mb-8 text-center">
             <h1 class="text-3xl md:text-4xl font-bold text-gray-900">🎾 Tennis Channel Project Tracking Board</h1>
             <p class="text-gray-600 mt-2">A live view of project tasks, updated on refresh.</p>
+            <button id="export-pdf-btn" class="mt-4 bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors">
+                Export as PDF
+            </button>
         </header>
 
         <!-- Loading and Error States -->
@@ -92,6 +137,7 @@
             const errorMessage = document.getElementById('error-message');
             const errorText = document.getElementById('error-text');
             const kanbanBoard = document.getElementById('kanban-board');
+            const exportPdfBtn = document.getElementById('export-pdf-btn');
             
             const columns = {
                 'To Do': document.getElementById('todo-cards'),
@@ -103,36 +149,53 @@
             // Function to create a single task card
             const createTaskCard = (task) => {
                 const card = document.createElement('div');
-                card.className = 'bg-gray-50 border border-gray-200 rounded-lg p-4 shadow-sm hover:shadow-md hover:border-blue-500 transition-shadow duration-200';
+                card.className = 'bg-gray-50 border border-gray-200 rounded-lg p-4 shadow-sm hover:shadow-md hover:border-blue-500 transition-shadow duration-200 cursor-grab';
+                card.draggable = true;
+                card.id = `task-${task['Task ID'] || Math.random().toString(36).substr(2, 9)}`;
 
-                // Format the creation date
                 const createdDate = new Date(task['Created At']).toLocaleDateString('en-US', {
                     year: 'numeric', month: 'short', day: 'numeric'
                 });
 
                 card.innerHTML = `
-                    <h3 class="font-semibold text-md mb-2 text-gray-900">${task.Name || 'Untitled Task'}</h3>
-                    <p class="text-sm text-gray-600 mb-3 break-words">${task.Notes || 'No notes available.'}</p>
-                    <div class="border-t border-gray-200 pt-3 flex justify-between items-center text-xs text-gray-500">
-                        <span class="font-medium bg-blue-100 text-blue-800 px-2 py-1 rounded-full">${task['Owner(s)'] || 'Unassigned'}</span>
-                        <span>Created: ${createdDate}</span>
+                    <div class="flex items-start gap-3">
+                        <input type="checkbox" class="task-checkbox mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                        <div class="flex-1">
+                            <h3 class="font-semibold text-md mb-2 text-gray-900 task-name">${task.Name || 'Untitled Task'}</h3>
+                            <p class="text-sm text-gray-600 mb-3 break-words task-notes">${task.Notes || 'No notes available.'}</p>
+                            <div class="border-t border-gray-200 pt-3 flex justify-between items-center text-xs text-gray-500">
+                                <span class="font-medium bg-blue-100 text-blue-800 px-2 py-1 rounded-full">${task['Owner(s)'] || 'Unassigned'}</span>
+                                <span>Created: ${createdDate}</span>
+                            </div>
+                        </div>
                     </div>
                 `;
+
+                // Checkbox strikethrough logic
+                const checkbox = card.querySelector('.task-checkbox');
+                checkbox.addEventListener('change', () => {
+                    card.classList.toggle('task-done', checkbox.checked);
+                });
+
+                // Drag and drop event listeners for the card
+                card.addEventListener('dragstart', (e) => {
+                    card.classList.add('dragging');
+                    e.dataTransfer.setData('text/plain', card.id);
+                });
+
+                card.addEventListener('dragend', () => {
+                    card.classList.remove('dragging');
+                });
+
                 return card;
             };
 
-            /**
-             * A robust CSV to JSON converter that handles quoted fields.
-             */
             function csvToJson(csvText) {
                 const lines = csvText.trim().split('\n');
                 if (lines.length < 2) return [];
-
                 const headers = lines[0].split(',').map(h => h.trim());
                 const jsonResult = [];
-
                 for (let i = 1; i < lines.length; i++) {
-                    // Regex to split by comma but ignore commas inside double quotes
                     const values = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
                     if (values.length !== headers.length) {
                         console.warn(`Skipping malformed row ${i+1}:`, lines[i]);
@@ -141,7 +204,6 @@
                     const obj = {};
                     for (let j = 0; j < headers.length; j++) {
                         let value = values[j].trim();
-                        // Clean up quotes from CSV format
                         if (value.startsWith('"') && value.endsWith('"')) {
                             value = value.slice(1, -1).replace(/""/g, '"');
                         }
@@ -152,25 +214,18 @@
                 return jsonResult;
             }
             
-            /**
-             * Adjusts the height of the card containers to fill the viewport.
-             */
             const adjustColumnHeights = () => {
                 const firstCardContainer = document.getElementById('todo-cards');
                 if (!firstCardContainer || kanbanBoard.classList.contains('hidden')) return;
-
                 const topOffset = firstCardContainer.getBoundingClientRect().top;
-                const bottomPadding = 24; // Equivalent to p-6 in tailwind for space at the bottom
-                
+                const bottomPadding = 24;
                 const calculatedHeight = window.innerHeight - topOffset - bottomPadding;
-
                 const cardContainers = document.querySelectorAll('.cards-container');
                 cardContainers.forEach(container => {
                     container.style.height = `${calculatedHeight}px`;
                 });
             };
 
-            // Function to fetch, parse, and display tasks
             const fetchAndDisplayTasks = async () => {
                 loadingIndicator.style.display = 'block';
                 errorMessage.classList.add('hidden');
@@ -183,20 +238,13 @@
 
                 try {
                     const response = await fetch(FETCH_URL, { cache: 'no-cache' });
-                    if (!response.ok) {
-                        throw new Error(`Network Error: Status ${response.status}. The proxy or Asana link may be down.`);
-                    }
+                    if (!response.ok) throw new Error(`Network Error: Status ${response.status}. The proxy or Asana link may be down.`);
                     
                     const csvText = await response.text();
-                     if(!csvText) {
-                        throw new Error("Received empty data from the source. The Asana link may have expired.");
-                    }
+                    if(!csvText) throw new Error("Received empty data from the source. The Asana link may have expired.");
 
                     const tasks = csvToJson(csvText);
-
-                    if (!Array.isArray(tasks)) {
-                         throw new Error('Data format is incorrect after conversion. Expected an array.');
-                    }
+                    if (!Array.isArray(tasks)) throw new Error('Data format is incorrect after conversion. Expected an array.');
 
                     tasks.forEach(task => {
                         const section = task['Section/Column'];
@@ -212,7 +260,6 @@
                     });
 
                     kanbanBoard.classList.remove('hidden');
-                    // Adjust heights once the board is visible
                     adjustColumnHeights();
 
                 } catch (error) {
@@ -224,10 +271,34 @@
                 }
             };
 
+            // Setup drag and drop for columns
+            Object.values(columns).forEach(container => {
+                container.addEventListener('dragover', e => {
+                    e.preventDefault();
+                    container.classList.add('drag-over');
+                });
+                container.addEventListener('dragleave', () => {
+                    container.classList.remove('drag-over');
+                });
+                container.addEventListener('drop', e => {
+                    e.preventDefault();
+                    container.classList.remove('drag-over');
+                    const cardId = e.dataTransfer.getData('text/plain');
+                    const draggable = document.getElementById(cardId);
+                    if (draggable) {
+                        container.appendChild(draggable);
+                    }
+                });
+            });
+            
+            // PDF export event listener
+            exportPdfBtn.addEventListener('click', () => {
+                window.print();
+            });
+
             // Initial fetch
             fetchAndDisplayTasks();
             
-            // Adjust column heights on window resize
             window.addEventListener('resize', adjustColumnHeights);
         });
     </script>
