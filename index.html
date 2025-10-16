@@ -99,7 +99,7 @@
             <!-- To Do Column -->
             <div class="bg-white rounded-xl shadow-sm flex flex-col">
                 <h2 class="text-lg font-semibold text-gray-700 p-4 border-b border-gray-200 sticky top-0 bg-white rounded-t-xl">To Do</h2>
-                <div id="todo-cards" class="p-4 cards-container space-y-4 overflow-y-auto">
+                <div id="todo-cards" class="p-4 cards-container space-y-4">
                     <!-- Task cards will be inserted here -->
                 </div>
             </div>
@@ -107,7 +107,7 @@
             <!-- In Progress Column -->
             <div class="bg-white rounded-xl shadow-sm flex flex-col">
                 <h2 class="text-lg font-semibold text-gray-700 p-4 border-b border-gray-200 sticky top-0 bg-white rounded-t-xl">In Progress</h2>
-                <div id="inprogress-cards" class="p-4 cards-container space-y-4 overflow-y-auto">
+                <div id="inprogress-cards" class="p-4 cards-container space-y-4">
                     <!-- Task cards will be inserted here -->
                 </div>
             </div>
@@ -115,7 +115,7 @@
             <!-- Done Column -->
             <div class="bg-white rounded-xl shadow-sm flex flex-col">
                 <h2 class="text-lg font-semibold text-gray-700 p-4 border-b border-gray-200 sticky top-0 bg-white rounded-t-xl">Done</h2>
-                <div id="done-cards" class="p-4 cards-container space-y-4 overflow-y-auto">
+                <div id="done-cards" class="p-4 cards-container space-y-4">
                     <!-- Task cards will be inserted here -->
                 </div>
             </div>
@@ -123,7 +123,7 @@
             <!-- Backlog Column -->
             <div class="bg-white rounded-xl shadow-sm flex flex-col">
                 <h2 class="text-lg font-semibold text-gray-700 p-4 border-b border-gray-200 sticky top-0 bg-white rounded-t-xl">Backlog</h2>
-                <div id="backlog-cards" class="p-4 cards-container space-y-4 overflow-y-auto">
+                <div id="backlog-cards" class="p-4 cards-container space-y-4">
                     <!-- Task cards will be inserted here -->
                 </div>
             </div>
@@ -153,18 +153,26 @@
                 card.draggable = true;
                 card.id = `task-${task['Task ID'] || Math.random().toString(36).substr(2, 9)}`;
 
-                const createdDate = new Date(task['Created At']).toLocaleDateString('en-US', {
-                    year: 'numeric', month: 'short', day: 'numeric'
-                });
+                const createdDateStr = task['Created At'];
+                let createdDate = 'N/A';
+                if (createdDateStr && !isNaN(new Date(createdDateStr))) {
+                    createdDate = new Date(createdDateStr).toLocaleDateString('en-US', {
+                        year: 'numeric', month: 'short', day: 'numeric'
+                    });
+                }
+                
+                // There can be two "Notes" columns, we prefer the second one which is more descriptive.
+                // The parser will overwrite the first with the second, which is the desired behavior.
+                const taskNotes = task.Notes || 'No notes available.';
 
                 card.innerHTML = `
                     <div class="flex items-start gap-3">
                         <input type="checkbox" class="task-checkbox mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
                         <div class="flex-1">
                             <h3 class="font-semibold text-md mb-2 text-gray-900 task-name">${task.Name || 'Untitled Task'}</h3>
-                            <p class="text-sm text-gray-600 mb-3 break-words task-notes">${task.Notes || 'No notes available.'}</p>
+                            <p class="text-sm text-gray-600 mb-3 break-words task-notes">${taskNotes}</p>
                             <div class="border-t border-gray-200 pt-3 flex justify-between items-center text-xs text-gray-500">
-                                <span class="font-medium bg-blue-100 text-blue-800 px-2 py-1 rounded-full">${task['Owner(s)'] || 'Unassigned'}</span>
+                                <span class="font-medium bg-blue-100 text-blue-800 px-2 py-1 rounded-full">${task['Owner(s)'] || task['Assignee'] || 'Unassigned'}</span>
                                 <span>Created: ${createdDate}</span>
                             </div>
                         </div>
@@ -190,42 +198,58 @@
                 return card;
             };
 
+            /**
+             * Converts CSV text to a JSON array of objects.
+             * This parser correctly handles commas inside quoted fields for both headers and data.
+             * @param {string} csvText The raw CSV string.
+             * @returns {Array<Object>} An array of task objects.
+             */
             function csvToJson(csvText) {
                 const lines = csvText.trim().split('\n');
                 if (lines.length < 2) return [];
-                const headers = lines[0].split(',').map(h => h.trim());
+
+                // Regex to split CSV rows while respecting quotes
+                const csvSplitter = /,(?=(?:(?:[^"]*"){2})*[^"]*$)/;
+
+                // FIX: Parse headers with the same regex as data rows to handle quoted commas
+                const headers = lines[0].trim().split(csvSplitter).map(h => {
+                    let header = h.trim();
+                    // Remove surrounding quotes from header fields (e.g., "Header with, comma")
+                    if (header.startsWith('"') && header.endsWith('"')) {
+                        header = header.slice(1, -1).replace(/""/g, '"');
+                    }
+                    return header;
+                });
+
                 const jsonResult = [];
                 for (let i = 1; i < lines.length; i++) {
-                    const values = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+                    const line = lines[i].trim();
+                    if (line === '') continue; // Skip empty lines
+
+                    const values = line.split(csvSplitter);
+
+                    // Skip rows where the column count doesn't match the header count
                     if (values.length !== headers.length) {
-                        console.warn(`Skipping malformed row ${i+1}:`, lines[i]);
+                        console.warn(`Skipping malformed row ${i + 1}: Column count mismatch. Expected ${headers.length}, found ${values.length}.`, line);
                         continue;
                     }
+
                     const obj = {};
-                    for (let j = 0; j < headers.length; j++) {
-                        let value = values[j].trim();
+                    headers.forEach((header, j) => {
+                        let value = (values[j] || '').trim(); // Use default empty string
+                        // Remove surrounding quotes and un-escape double quotes from data fields
                         if (value.startsWith('"') && value.endsWith('"')) {
                             value = value.slice(1, -1).replace(/""/g, '"');
                         }
-                        obj[headers[j]] = value;
-                    }
+                        // If a header is duplicated (like 'Notes'), this will overwrite the previous one.
+                        // In Asana exports, the second 'Notes' column is often more useful.
+                        obj[header] = value;
+                    });
                     jsonResult.push(obj);
                 }
                 return jsonResult;
             }
             
-            const adjustColumnHeights = () => {
-                const firstCardContainer = document.getElementById('todo-cards');
-                if (!firstCardContainer || kanbanBoard.classList.contains('hidden')) return;
-                const topOffset = firstCardContainer.getBoundingClientRect().top;
-                const bottomPadding = 24;
-                const calculatedHeight = window.innerHeight - topOffset - bottomPadding;
-                const cardContainers = document.querySelectorAll('.cards-container');
-                cardContainers.forEach(container => {
-                    container.style.height = `${calculatedHeight}px`;
-                });
-            };
-
             const fetchAndDisplayTasks = async () => {
                 loadingIndicator.style.display = 'block';
                 errorMessage.classList.add('hidden');
@@ -235,39 +259,65 @@
                 const ASANA_URL = "https://app.asana.com/-/googleSheetsProjectCsv?domain=319271502393035&key=c342a11eb9a76332e0fb53fb124396f9";
                 const PROXY_URL = "https://api.allorigins.win/raw?url=";
                 const FETCH_URL = PROXY_URL + encodeURIComponent(ASANA_URL);
+                
+                const MAX_RETRIES = 3;
+                for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                    try {
+                        const response = await fetch(FETCH_URL, { cache: 'no-cache' });
 
-                try {
-                    const response = await fetch(FETCH_URL, { cache: 'no-cache' });
-                    if (!response.ok) throw new Error(`Network Error: Status ${response.status}. The proxy or Asana link may be down.`);
-                    
-                    const csvText = await response.text();
-                    if(!csvText) throw new Error("Received empty data from the source. The Asana link may have expired.");
-
-                    const tasks = csvToJson(csvText);
-                    if (!Array.isArray(tasks)) throw new Error('Data format is incorrect after conversion. Expected an array.');
-
-                    tasks.forEach(task => {
-                        const section = task['Section/Column'];
-                        const targetColumn = columns[section];
-                        
-                        if (targetColumn) {
-                            const card = createTaskCard(task);
-                            targetColumn.appendChild(card);
-                        } else {
-                            console.warn(`Task "${task.Name}" has an unknown section: "${section}", moving to Backlog.`);
-                            columns['Backlog'].appendChild(createTaskCard(task));
+                        // Check for retryable server errors or timeouts
+                        if (!response.ok) {
+                            if ((response.status === 408 || response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES - 1) {
+                                console.warn(`Request failed with status ${response.status}. Retrying... (Attempt ${attempt + 1})`);
+                                const delay = Math.pow(2, attempt) * 1000; // Exponential backoff: 1s, 2s
+                                await new Promise(resolve => setTimeout(resolve, delay));
+                                continue; // Move to the next attempt
+                            }
+                            // If it's another error or the last retry, throw to be caught below
+                            throw new Error(`Network Error: Status ${response.status}. The proxy or Asana link may be down.`);
                         }
-                    });
+                        
+                        const csvText = await response.text();
+                        if (!csvText) throw new Error("Received empty data from the source. The Asana link may have expired.");
 
-                    kanbanBoard.classList.remove('hidden');
-                    adjustColumnHeights();
+                        const tasks = csvToJson(csvText);
+                        if (!Array.isArray(tasks)) throw new Error('Data format is incorrect after conversion. Expected an array.');
+                        
+                        if (tasks.length === 0) {
+                            throw new Error('No tasks were found. The CSV might be empty or formatted incorrectly.');
+                        }
 
-                } catch (error) {
-                    console.error('Error fetching or processing data:', error);
-                    errorText.textContent = error.message;
-                    errorMessage.classList.remove('hidden');
-                } finally {
-                    loadingIndicator.style.display = 'none';
+                        tasks.forEach(task => {
+                            const section = task['Section/Column'];
+                            const targetColumn = columns[section];
+                            
+                            if (targetColumn) {
+                                const card = createTaskCard(task);
+                                targetColumn.appendChild(card);
+                            } else {
+                                console.warn(`Task "${task.Name}" has an unknown section: "${section}", moving to Backlog.`);
+                                columns['Backlog'].appendChild(createTaskCard(task));
+                            }
+                        });
+
+                        kanbanBoard.classList.remove('hidden');
+                        loadingIndicator.style.display = 'none';
+                        return; // Success, so we exit the function
+
+                    } catch (error) {
+                        // This catches fetch errors (e.g., no internet) and the error thrown above
+                        if (attempt < MAX_RETRIES - 1) {
+                            console.warn(`An error occurred: ${error.message}. Retrying... (Attempt ${attempt + 1})`);
+                             const delay = Math.pow(2, attempt) * 1000;
+                             await new Promise(resolve => setTimeout(resolve, delay));
+                        } else {
+                            // This was the last attempt, so show the final error
+                            console.error('Error fetching or processing data after multiple retries:', error);
+                            errorText.textContent = `${error.message} This could be a temporary issue. Please try refreshing the page later.`;
+                            errorMessage.classList.remove('hidden');
+                            loadingIndicator.style.display = 'none';
+                        }
+                    }
                 }
             };
 
@@ -299,7 +349,6 @@
             // Initial fetch
             fetchAndDisplayTasks();
             
-            window.addEventListener('resize', adjustColumnHeights);
         });
     </script>
 
